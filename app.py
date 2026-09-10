@@ -94,7 +94,9 @@ def health():
 )
 def generate_token_options():
 
-    response = make_response("", 204)
+    response = jsonify({"ok": True})
+
+    response.status_code = 200
 
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = (
@@ -106,7 +108,6 @@ def generate_token_options():
     response.headers["Access-Control-Max-Age"] = "86400"
 
     return response
-
 
 # ============================================================
 # WAKE SANIA AGENT
