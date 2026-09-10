@@ -5,7 +5,7 @@ import uuid
 from datetime import timedelta
 
 import httpx
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, make_response
 from livekit import api
 
 
@@ -20,8 +20,6 @@ LIVEKIT_URL = os.environ["LIVEKIT_URL"]
 LIVEKIT_API_KEY = os.environ["LIVEKIT_API_KEY"]
 LIVEKIT_API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 
-# IMPORTANT:
-# This must match the agent_name used by the hosted Sania worker.
 AGENT_NAME = os.getenv(
     "LIVEKIT_AGENT_NAME",
     "aarna-sania-laptop-test",
@@ -31,13 +29,16 @@ TOKEN_TTL_MINUTES = int(
     os.getenv("LIVEKIT_TOKEN_TTL_MINUTES", "30")
 )
 
-# Public Render URL of the Sania agent Web Service.
-# A request to this URL wakes a sleeping Free Render instance before
-# we create the LiveKit dispatch.
-SANIA_AGENT_URL = os.getenv("SANIA_AGENT_URL", "").rstrip("/")
+SANIA_AGENT_URL = os.getenv(
+    "SANIA_AGENT_URL",
+    ""
+).rstrip("/")
 
 SANIA_WAKE_TIMEOUT_SECONDS = int(
-    os.getenv("SANIA_WAKE_TIMEOUT_SECONDS", "90")
+    os.getenv(
+        "SANIA_WAKE_TIMEOUT_SECONDS",
+        "90"
+    )
 )
 
 
@@ -47,13 +48,20 @@ SANIA_WAKE_TIMEOUT_SECONDS = int(
 
 @app.after_request
 def add_cors_headers(response):
+
+    # Allow browser pages, including local file:// pages.
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = (
-        "Content-Type, Authorization"
-    )
+
     response.headers["Access-Control-Allow-Methods"] = (
         "GET, POST, OPTIONS"
     )
+
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type, Authorization, Accept"
+    )
+
+    response.headers["Access-Control-Max-Age"] = "86400"
+
     return response
 
 
@@ -77,16 +85,34 @@ def health():
 
 
 # ============================================================
+# EXPLICIT CORS PREFLIGHT
+# ============================================================
+
+@app.route(
+    "/api/generate-token",
+    methods=["OPTIONS"]
+)
+def generate_token_options():
+
+    response = make_response("", 204)
+
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = (
+        "POST, OPTIONS"
+    )
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type, Authorization, Accept"
+    )
+    response.headers["Access-Control-Max-Age"] = "86400"
+
+    return response
+
+
+# ============================================================
 # WAKE SANIA AGENT
 # ============================================================
 
 async def wake_sania_agent() -> None:
-    """
-    Wake the Free Render Sania Web Service before dispatching a job.
-
-    Render Free Web Services sleep after inactivity. Calling the
-    Sania worker's built-in LiveKit health endpoint wakes it.
-    """
 
     if not SANIA_AGENT_URL:
         raise RuntimeError(
@@ -95,8 +121,10 @@ async def wake_sania_agent() -> None:
 
     health_url = f"{SANIA_AGENT_URL}/"
 
+    loop = asyncio.get_running_loop()
+
     deadline = (
-        asyncio.get_running_loop().time()
+        loop.time()
         + SANIA_WAKE_TIMEOUT_SECONDS
     )
 
@@ -109,10 +137,13 @@ async def wake_sania_agent() -> None:
         )
     ) as client:
 
-        while asyncio.get_running_loop().time() < deadline:
+        while loop.time() < deadline:
 
             try:
-                response = await client.get(health_url)
+
+                response = await client.get(
+                    health_url
+                )
 
                 if 200 <= response.status_code < 300:
                     return
@@ -123,13 +154,15 @@ async def wake_sania_agent() -> None:
                 )
 
             except Exception as exc:
+
                 last_error = repr(exc)
 
             await asyncio.sleep(3)
 
     raise RuntimeError(
         "Sania agent did not become reachable within "
-        f"{SANIA_WAKE_TIMEOUT_SECONDS} seconds: {last_error}"
+        f"{SANIA_WAKE_TIMEOUT_SECONDS} seconds: "
+        f"{last_error}"
     )
 
 
@@ -139,13 +172,9 @@ async def wake_sania_agent() -> None:
 
 @app.route(
     "/api/generate-token",
-    methods=["POST", "OPTIONS"],
+    methods=["POST"]
 )
 async def generate_token():
-
-    # Handle browser CORS preflight
-    if request.method == "OPTIONS":
-        return "", 204
 
     try:
 
@@ -160,40 +189,40 @@ async def generate_token():
         partner_name = str(
             body.get(
                 "partner_name",
-                "",
+                ""
             )
         ).strip()
 
         contact_name = str(
             body.get(
                 "contact_name",
-                "",
+                ""
             )
         ).strip()
 
         category = str(
             body.get(
                 "category",
-                "",
+                ""
             )
         ).strip()
 
         company_synopsis = str(
             body.get(
                 "company_synopsis",
-                "",
+                ""
             )
         ).strip()
 
         digitisation = str(
             body.get(
                 "digitisation",
-                "",
+                ""
             )
         ).strip()
 
         # ----------------------------------------------------
-        # Generate unique room and participant identity
+        # Generate unique room
         # ----------------------------------------------------
 
         room_name = (
@@ -219,7 +248,7 @@ async def generate_token():
         )
 
         # ----------------------------------------------------
-        # Wake Sania's Render Free Web Service
+        # Wake Sania
         # ----------------------------------------------------
 
         await wake_sania_agent()
@@ -237,7 +266,7 @@ async def generate_token():
         try:
 
             # ------------------------------------------------
-            # Dispatch Sania into this room
+            # Dispatch Sania
             # ------------------------------------------------
 
             dispatch = (
@@ -251,7 +280,7 @@ async def generate_token():
             )
 
             # ------------------------------------------------
-            # Generate browser access token
+            # Generate browser token
             # ------------------------------------------------
 
             token = (
@@ -283,7 +312,7 @@ async def generate_token():
             )
 
             # ------------------------------------------------
-            # Return credentials to browser
+            # Return credentials
             # ------------------------------------------------
 
             return jsonify(
@@ -308,6 +337,7 @@ async def generate_token():
             )
 
         finally:
+
             await lk.aclose()
 
     except Exception as e:
@@ -335,7 +365,7 @@ if __name__ == "__main__":
     port = int(
         os.getenv(
             "PORT",
-            "8000",
+            "8000"
         )
     )
 
