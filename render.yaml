@@ -2,12 +2,18 @@ services:
   - type: web
     name: sania-token-server
     runtime: python
+    plan: free
 
     buildCommand: pip install -r requirements.txt
 
     startCommand: hypercorn app:app --bind 0.0.0.0:$PORT
 
+    healthCheckPath: /health
+
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+
       - key: LIVEKIT_URL
         sync: false
 
@@ -22,3 +28,9 @@ services:
 
       - key: LIVEKIT_TOKEN_TTL_MINUTES
         value: "30"
+
+      - key: SANIA_AGENT_URL
+        sync: false
+
+      - key: SANIA_WAKE_TIMEOUT_SECONDS
+        value: "90"
